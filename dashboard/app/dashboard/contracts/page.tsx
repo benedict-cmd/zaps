@@ -4,6 +4,7 @@ import { usePolling } from "@/lib/use-polling";
 import { api, IdentityLink } from "@/lib/api";
 import StatCard from "@/components/StatCard";
 import { X, Shield, AlertTriangle, Search, Copy, Check, Link2, Wallet } from "lucide-react";
+import { useWallet, signWithFreighter } from "@/lib/freighter";
 
 function severityColor(severity: string) {
   if (severity === "critical") return "bg-red-50 border-red-200 text-red-800";
@@ -168,6 +169,8 @@ function UsernamesTable() {
   const [sortKey, setSortKey] = useState<"username" | "registered_at">("registered_at");
   const [sortAsc, setSortAsc] = useState(false);
 
+  const { wallet, connect } = useWallet();
+
   // Blacklist confirmation drawer state
   const [showBlacklistDrawer, setShowBlacklistDrawer] = useState(false);
   const [targetUsername, setTargetUsername] = useState<string | null>(null);
@@ -206,27 +209,28 @@ function UsernamesTable() {
     }
     if (!targetUsername || !targetPublicKey) return;
 
+    // Ensure wallet is connected before signing
+    if (!wallet.connected || !wallet.publicKey) {
+      try {
+        await connect();
+      } catch {
+        setBlacklistMsg({ type: "err", text: "Freighter wallet not connected. Please connect and try again." });
+        return;
+      }
+    }
+
     setSigning(true);
     setBlacklistMsg(null);
     try {
-      const { isConnected, getAddress, signTransaction } = await import("@stellar/freighter-api");
-      const connected = await isConnected();
-      if (!connected.isConnected) throw new Error("Freighter wallet not connected");
-
-      const addr = await getAddress();
-      if (!addr.address) throw new Error("Could not retrieve public key");
-
       const placeholderXdr = btoa(JSON.stringify({
         fn: "blacklist_user",
         username: targetUsername,
         public_key: targetPublicKey,
-        admin: addr.address
+        admin: wallet.publicKey,
       }));
 
-      const result = await signTransaction(placeholderXdr, { networkPassphrase: "Test SDF Network ; September 2015" });
-      if ("error" in result) throw new Error(result.error);
-
-      setBlacklistMsg({ type: "ok", text: `User @${targetUsername} has been blacklisted. Signed XDR: ${(result as { signedTxXdr: string }).signedTxXdr.slice(0, 24)}…` });
+      const result = await signWithFreighter(placeholderXdr, "Test SDF Network ; September 2015");
+      setBlacklistMsg({ type: "ok", text: `User @${targetUsername} has been blacklisted. Signed XDR: ${result.signedTxXdr.slice(0, 24)}…` });
       setTimeout(() => {
         setShowBlacklistDrawer(false);
         setBlacklistConfirmed(false);
