@@ -2,10 +2,12 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { format } from "date-fns";
 import {
+  detectFreighter,
+  connectFreighter,
   signWithFreighter,
   truncateKey,
-  useWallet,
   type FreighterWalletState,
+  DEFAULT_WALLET_STATE,
 } from "@/lib/freighter";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -225,17 +227,26 @@ function WalletBadge({ wallet }: { wallet: FreighterWalletState }) {
 export default function YieldPage() {
   const [tab, setTab] = useState<"config" | "audit">("config");
 
-  // ── Wallet state (shared via WalletProvider) ─────────────────────────────
-  const { wallet, restoring, connecting, connect } = useWallet();
-  const walletLoading = restoring || connecting;
+  // ── Wallet state ─────────────────────────────────────────────────────────────
+  const [wallet, setWallet] = useState<FreighterWalletState>(DEFAULT_WALLET_STATE);
+  const [walletLoading, setWalletLoading] = useState(false);
+
+  useEffect(() => {
+    // Auto-detect on mount (client-side only)
+    detectFreighter().then(setWallet);
+  }, []);
 
   const handleConnectWallet = useCallback(async () => {
+    setWalletLoading(true);
     try {
-      await connect();
+      const state = await connectFreighter();
+      setWallet(state);
     } catch (err) {
       console.error("Wallet connect failed:", err);
+    } finally {
+      setWalletLoading(false);
     }
-  }, [connect]);
+  }, []);
 
   // ── Config / signing state ────────────────────────────────────────────────────
   const [params, setParams] = useState<VaultParams>({
