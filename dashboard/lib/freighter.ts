@@ -2,7 +2,23 @@
  * freighter.ts
  * Helper utilities for @stellar/freighter-api browser wallet integration.
  * All functions are async-safe and handle the case where Freighter is not installed.
+ *
+ * Also exports WalletProvider / useWallet so wallet state is shared across the
+ * whole app and survives page navigation without requiring the user to reconnect.
  */
+
+"use client";
+
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface FreighterWalletState {
   installed: boolean;
@@ -18,6 +34,8 @@ export const DEFAULT_WALLET_STATE: FreighterWalletState = {
   publicKey: null,
   network: null,
 };
+
+// ── Stateless helpers (safe to call outside React) ────────────────────────────
 
 /**
  * Detect whether Freighter is installed in the browser and, if so,
@@ -100,4 +118,73 @@ export async function signWithFreighter(
 export function truncateKey(key: string, head = 4, tail = 4): string {
   if (key.length <= head + tail + 3) return key;
   return `${key.slice(0, head)}…${key.slice(-tail)}`;
+}
+
+// ── WalletContext ─────────────────────────────────────────────────────────────
+
+interface WalletContextValue {
+  wallet: FreighterWalletState;
+  /** True while the initial session-restore check is running. */
+  restoring: boolean;
+  /** True while a user-initiated connect request is in flight. */
+  connecting: boolean;
+  connect: () => Promise<void>;
+}
+
+const WalletContext = createContext<WalletContextValue | null>(null);
+
+/**
+ * Wrap the dashboard (or the whole app) with this provider so any page can
+ * call `useWallet()` without managing its own wallet state.
+ *
+ * On mount it calls `isConnected()` via `detectFreighter()` and, if the user
+ * had previously granted access, restores the public key and network in state
+ * automatically — no prompt required.
+ */
+export function WalletProvider({ children }: { children: ReactNode }) {
+  const [wallet, setWallet] = useState<FreighterWalletState>(DEFAULT_WALLET_STATE);
+  const [restoring, setRestoring] = useState(true);
+  const [connecting, setConnecting] = useState(false);
+
+  // Restore session on mount (client-only — detectFreighter guards against SSR)
+  useEffect(() => {
+    let cancelled = false;
+    detectFreighter().then((state) => {
+      if (!cancelled) {
+        setWallet(state);
+        setRestoring(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const connect = useCallback(async () => {
+    setConnecting(true);
+    try {
+      const state = await connectFreighter();
+      setWallet(state);
+    } finally {
+      setConnecting(false);
+    }
+  }, []);
+
+  return (
+    <WalletContext.Provider value={{ wallet, restoring, connecting, connect }}>
+      {children}
+    </WalletContext.Provider>
+  );
+}
+
+/**
+ * Consume the shared Freighter wallet state from any client component.
+ * Must be used inside a `<WalletProvider>`.
+ */
+export function useWallet(): WalletContextValue {
+  const ctx = useContext(WalletContext);
+  if (!ctx) {
+    throw new Error("useWallet must be used inside <WalletProvider>");
+  }
+  return ctx;
 }
